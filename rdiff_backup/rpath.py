@@ -35,7 +35,7 @@ are dealing with are local or remote.
 
 """
 
-import os, stat, re, sys, shutil, gzip, socket, time, errno
+import os, stat, re, sys, shutil, gzip, socket, time, errno, codecs
 import Globals, Time, static, log, user_group, C
 
 try:
@@ -284,6 +284,8 @@ def make_file_dict(filename):
 	"""
 	if os.name != 'nt':
 		try:
+			if type(filename) == unicode:
+				filename = filename.encode('utf-8')
 			return C.make_file_dict(filename)
 		except OSError, error:
 			# Unicode filenames should be process by the Python version 
@@ -307,23 +309,23 @@ def make_file_dict_python(filename):
 	data = {}
 	mode = statblock[stat.ST_MODE]
 
-	if stat.S_ISREG(mode): type = 'reg'
-	elif stat.S_ISDIR(mode): type = 'dir'
+	if stat.S_ISREG(mode): type_ = 'reg'
+	elif stat.S_ISDIR(mode): type_ = 'dir'
 	elif stat.S_ISCHR(mode):
-		type = 'dev'
+		type_ = 'dev'
 		s = statblock.st_rdev
 		data['devnums'] = ('c',) + (s >> 8, s & 0xff)
 	elif stat.S_ISBLK(mode):
-		type = 'dev'
+		type_ = 'dev'
 		s = statblock.st_rdev
 		data['devnums'] = ('b',) + (s >> 8, s & 0xff)
-	elif stat.S_ISFIFO(mode): type = 'fifo'
+	elif stat.S_ISFIFO(mode): type_ = 'fifo'
 	elif stat.S_ISLNK(mode):
-		type = 'sym'
+		type_ = 'sym'
 		data['linkname'] = os.readlink(filename)
-	elif stat.S_ISSOCK(mode): type = 'sock'
+	elif stat.S_ISSOCK(mode): type_ = 'sock'
 	else: raise C.UnknownFileError(filename)
-	data['type'] = type
+	data['type'] = type_
 	data['size'] = statblock[stat.ST_SIZE]
 	data['perms'] = stat.S_IMODE(mode)
 	data['uid'] = statblock[stat.ST_UID]
@@ -333,12 +335,16 @@ def make_file_dict_python(filename):
 	data['nlink'] = statblock[stat.ST_NLINK]
 
 	if os.name == 'nt':
-		attribs = win32file.GetFileAttributes(filename)
+		global type
+		if type(filename) == unicode:
+			attribs = win32file.GetFileAttributesW(filename)
+		else:
+			attribs = win32file.GetFileAttributes(filename)
 		if attribs & winnt.FILE_ATTRIBUTE_REPARSE_POINT:
 			data['type'] = 'sym'
 			data['linkname'] = None
 
-	if not (type == 'sym' or type == 'dev'):
+	if not (type_ == 'sym' or type_ == 'dev'):
 		# mtimes on symlinks and dev files don't work consistently
 		data['mtime'] = long(statblock[stat.ST_MTIME])
 		data['atime'] = long(statblock[stat.ST_ATIME])
@@ -995,7 +1001,12 @@ class RPath(RORPath):
 
 	def listdir(self):
 		"""Return list of string paths returned by os.listdir"""
-		return self.conn.os.listdir(self.path)
+		path = self.path
+		# Use pass in unicode to os.listdir, so that the returned
+		# entries are in unicode.
+		if type(path) != unicode and Globals.use_unicode_paths:
+			path = unicode(path, 'utf-8')
+		return self.conn.os.listdir(path)
 
 	def symlink(self, linktext):
 		"""Make symlink at self.path pointing to linktext"""
@@ -1406,6 +1417,34 @@ class RPath(RORPath):
 		write_win_acl(self, acl)
 		self.data['win_acl'] = acl
 
+class MaybeUnicode:
+	""" Wraps a RPath and reads/writes unicode if Globals.use_unicode_paths is on. """
+
+	def __init__(self, fileobj):
+		self.fileobj = fileobj
+
+	def read(self, length = -1):
+		data = self.fileobj.read(length)
+		if Globals.use_unicode_paths:
+			data = unicode(data, 'utf-8')
+		return data
+
+	def readline(self, length=-1):
+		data = self.fileobj.readline(length)
+		if Globals.use_unicode_paths:
+			data = unicode(data, 'utf-8')
+		return data
+
+	def write(self, buf):
+		if Globals.use_unicode_paths:
+			if type(buf) != unicode:
+				buf = unicode(buf, 'utf-8')
+			buf = buf.encode('utf-8')
+		return self.fileobj.write(buf)
+
+	def close(self):
+		return self.fileobj.close()
+
 class RPathFileHook:
 	"""Look like a file, but add closing hook"""
 	def __init__(self, file, closing_thunk):
@@ -1429,6 +1468,18 @@ class GzipFile(gzip.GzipFile):
 	messages.  Use this class instead to clean those up.
 
 	"""
+	def __init__(self, filename=None, mode=None):
+		""" This is needed because we need to write an
+		encoded filename to the file, but use normal
+		unicode with the filename."""
+		if mode and 'b' not in mode:
+			mode += 'b'
+		if type(filename) != unicode and Globals.use_unicode_paths:
+			filename = unicode(filename, 'utf-8')
+		fileobj = open(filename, mode or 'rb')
+		gzip.GzipFile.__init__(self, filename.encode('utf-8'),
+							mode=mode, fileobj=fileobj)
+
 	def __del__(self): pass
 	def __getattr__(self, name):
 		if name == 'fileno': return self.fileobj.fileno

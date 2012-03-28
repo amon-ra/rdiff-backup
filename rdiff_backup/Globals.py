@@ -23,7 +23,7 @@ import re, os
 
 
 # The current version of rdiff-backup
-version = "1.3.3"
+version = "$version"
 
 # If this is set, use this value in seconds as the current time
 # instead of reading it from the clock.
@@ -158,6 +158,10 @@ rbdir = None
 # should be escaped (see FilenameMapping for more info).
 chars_to_quote = None
 quoting_char = ';'
+
+
+# Some systems don't support unicode in filenames
+use_unicode_paths = None
 
 # If true, the timestamps use the following format: "2008-09-01T04-49-04-07-00"
 # (instead of "2008-09-01T04:49:04-07:00"). This creates timestamps which

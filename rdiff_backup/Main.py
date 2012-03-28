@@ -290,7 +290,7 @@ def take_action(rps):
 	elif action == "remove-older-than": RemoveOlderThan(rps[0])
 	elif action == "restore": Restore(*rps)
 	elif action == "restore-as-of": Restore(rps[0], rps[1], 1)
-	elif action == "test-server": SetConnections.TestConnections()
+	elif action == "test-server": SetConnections.TestConnections(rps)
 	elif action == "verify": Verify(rps[0])
 	else: raise AssertionError("Unknown action " + action)
 
@@ -883,7 +883,7 @@ def CheckDest(dest_rp):
 		Log.FatalError("No destination dir found at %s" % (dest_rp.path,))
 	elif need_check == 0:
 		Log.FatalError("Destination dir %s does not need checking" %
-					   (dest_rp.path,), errlevel = 0)
+					   (dest_rp.path,), no_fatal_message = 1, errlevel = 0)
 	init_user_group_mapping(dest_rp.conn)
 	dest_rp.conn.regress.Regress(dest_rp)
 

@@ -38,6 +38,11 @@ import static, Globals, eas_acls, connection, metadata, rorpiter, log, C, \
 # triggers a warning.
 dropped_acl_names = {}
 
+def encode(str_):
+	if type(str_) == unicode:
+		return str_.encode('utf-8')
+	return str_
+
 class ExtendedAttributes:
 	"""Hold a file's extended attribute information"""
 	def __init__(self, index, attr_dict = None):
@@ -57,7 +62,8 @@ class ExtendedAttributes:
 	def read_from_rp(self, rp):
 		"""Set the extended attributes from an rpath"""
 		try:
-			attr_list = rp.conn.xattr.listxattr(rp.path, rp.issym())
+			attr_list = rp.conn.xattr.listxattr(encode(rp.path),
+												rp.issym())
 		except IOError, exc:
 			if exc[0] in (errno.EOPNOTSUPP, errno.EPERM, errno.ETXTBSY):
 				return # if not supported, consider empty
@@ -74,7 +80,8 @@ class ExtendedAttributes:
 				continue
 			try:
 				self.attr_dict[attr] = \
-					rp.conn.xattr.getxattr(rp.path, attr, rp.issym())
+					rp.conn.xattr.getxattr(encode(rp.path),
+											attr, rp.issym())
 			except IOError, exc:
 				# File probably modified while reading, just continue
 				if exc[0] == errno.ENODATA: continue
@@ -86,9 +93,11 @@ class ExtendedAttributes:
 	def clear_rp(self, rp):
 		"""Delete all the extended attributes in rpath"""
 		try:
-			for name in rp.conn.xattr.listxattr(rp.path, rp.issym()):
+			for name in rp.conn.xattr.listxattr(encode(rp.path),
+												rp.issym()):
 				try:
-					rp.conn.xattr.removexattr(rp.path, name, rp.issym())
+					rp.conn.xattr.removexattr(encode(rp.path),
+											name, rp.issym())
 				except IOError, exc:
 					# SELinux attributes cannot be removed, and we don't want
 					# to bail out or be too noisy at low log levels.
@@ -111,7 +120,8 @@ class ExtendedAttributes:
 		self.clear_rp(rp)
 		for (name, value) in self.attr_dict.iteritems():
 			try:
-				rp.conn.xattr.setxattr(rp.path, name, value, 0, rp.issym())
+				rp.conn.xattr.setxattr(encode(rp.path), name,
+										value, 0, rp.issym())
 			except IOError, exc:
 				# Mac and Linux attributes have different namespaces, so
 				# fail gracefully if can't call setxattr
@@ -149,13 +159,14 @@ def ea_compare_rps(rp1, rp2):
 
 def EA2Record(ea):
 	"""Convert ExtendedAttributes object to text record"""
-	str_list = ['# file: %s' % C.acl_quote(ea.get_indexpath())]
+	str_list = ['# file: %s' % C.acl_quote(encode(ea.get_indexpath()))]
 	for (name, val) in ea.attr_dict.iteritems():
 		if not val: str_list.append(name)
 		else:
 			encoded_val = base64.encodestring(val).replace('\n', '')
 			try:
-				str_list.append('%s=0s%s' % (C.acl_quote(name), encoded_val))
+				str_list.append('%s=0s%s' % (C.acl_quote(encode(name)),
+											encoded_val))
 			except UnicodeEncodeError:
 				log.Log("Warning: unable to store Unicode extended attribute %s"
 							% repr(name), 3)
@@ -169,7 +180,11 @@ def Record2EA(record):
 		raise metadata.ParsingError("Bad record beginning: " + first[:8])
 	filename = first[8:]
 	if filename == '.': index = ()
-	else: index = tuple(C.acl_unquote(filename).split('/'))
+	else:
+		unquoted_filename = C.acl_unquote(encode(filename))
+		if Globals.use_unicode_paths:
+			unquoted_filename = unicode(unquoted_filename, 'utf-8')
+		index = tuple(unquoted_filename.split('/'))
 	ea = ExtendedAttributes(index)
 
 	for line in lines:
@@ -194,7 +209,7 @@ class EAExtractor(metadata.FlatExtractor):
 	def filename_to_index(self, filename):
 		"""Convert possibly quoted filename to index tuple"""
 		if filename == '.': return ()
-		else: return tuple(C.acl_unquote(filename).split('/'))
+		else: return tuple(C.acl_unquote(encode(filename)).split('/'))
 
 class ExtendedAttributesFile(metadata.FlatFile):
 	"""Store/retrieve EAs from extended_attributes file"""
@@ -379,7 +394,7 @@ def set_rp_acl(rp, entry_list = None, default_entry_list = None,
 	else: acl = posix1e.ACL()
 
 	try:
-		acl.applyto(rp.path)
+		acl.applyto(encode(rp.path))
 	except IOError, exc:
 		if exc[0] == errno.EOPNOTSUPP:
 			log.Log("Warning: unable to set ACL on %s: %s" % 
@@ -391,12 +406,12 @@ def set_rp_acl(rp, entry_list = None, default_entry_list = None,
 		if default_entry_list:
 			def_acl = list_to_acl(default_entry_list, map_names)
 		else: def_acl = posix1e.ACL()
-		def_acl.applyto(rp.path, posix1e.ACL_TYPE_DEFAULT)
+		def_acl.applyto(encode(rp.path), posix1e.ACL_TYPE_DEFAULT)
 
 def get_acl_lists_from_rp(rp):
 	"""Returns (acl_list, def_acl_list) from an rpath.  Call locally"""
 	assert rp.conn is Globals.local_connection
-	try: acl = posix1e.ACL(file=rp.path)
+	try: acl = posix1e.ACL(file=encode(rp.path))
 	except IOError, exc:
 		if exc[0] == errno.EOPNOTSUPP:
 			acl = None
@@ -406,7 +421,7 @@ def get_acl_lists_from_rp(rp):
 			acl = None
 		else: raise
 	if rp.isdir():
-		try: def_acl = posix1e.ACL(filedef=rp.path)
+		try: def_acl = posix1e.ACL(filedef=encode(rp.path))
 		except IOError, exc:
 			if exc[0] == errno.EOPNOTSUPP:
 				def_acl = None
@@ -533,7 +548,8 @@ def acl_compare_rps(rp1, rp2):
 
 def ACL2Record(acl):
 	"""Convert an AccessControlLists object into a text record"""
-	return '# file: %s\n%s\n' % (C.acl_quote(acl.get_indexpath()), str(acl))
+	return '# file: %s\n%s\n' % \
+		(C.acl_quote(encode(acl.get_indexpath())), str(acl))
 
 def Record2ACL(record):
 	"""Convert text record to an AccessControlLists object"""
@@ -543,7 +559,11 @@ def Record2ACL(record):
 		raise metadata.ParsingError("Bad record beginning: "+ first_line)
 	filename = first_line[8:]
 	if filename == '.': index = ()
-	else: index = tuple(C.acl_unquote(filename).split('/'))
+	else:
+		unquoted_filename = C.acl_unquote(encode(filename))
+		if Globals.use_unicode_paths:
+			unquoted_filename = unicode(unquoted_filename, 'utf-8')
+		index = tuple(unquoted_filename.split('/'))
 	return AccessControlLists(index, record[newline_pos:])
 
 class ACLExtractor(EAExtractor):
